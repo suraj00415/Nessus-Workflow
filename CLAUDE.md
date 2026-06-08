@@ -6,15 +6,20 @@ Analyzes Nessus CSV exports — parses findings, verifies each one live with bas
 
 ## Security Rules
 
-- Web findings: read-only (`curl` headers/status only — no payloads, no auth)
-- Verify findings, never exploit them
-- Unreachable host → mark "Could not verify", never assume confirmed
+These apply globally — in all commands, skills, and sessions. No exceptions.
+
+- **Web findings are read-only** — `curl` headers/status only. No payloads, no login attempts, no form submissions, no data modification.
+- **Verify, never exploit** — a confirmed finding is documented, never abused.
+- **No target modification** — zero writes, zero config changes on scanned systems.
+- **Bash for live checks, Python for CSV parsing** — clean separation, always.
+- **Unreachable host** → mark "Could not verify (unreachable)". Never assume confirmed.
+- **Inconclusive result** → say so. Do not guess.
 
 ---
 
 ## Known Excluded Findings
 
-Findings acknowledged by the developer/asset owner. Do not verify these — just add a note in `findings.md`:
+Findings acknowledged by the developer/asset owner. Do not verify these — just add a note in `findings.md` under **Excluded Findings**:
 
 > **`<Finding Name>`** — Excluded from this assessment as acknowledged by the developer/asset owner.
 
@@ -26,7 +31,7 @@ Findings acknowledged by the developer/asset owner. Do not verify these — just
 
 ## Excluded Findings in findings.md
 
-When excluded findings are present, append at the end:
+When excluded findings are present, append at the end of the report:
 
 ```markdown
 ## Excluded Findings
