@@ -31,21 +31,26 @@ If multiple CSVs are present in the directory:
 
 ## Step 1.5 — Port & Service Accessibility Check (do this before any finding verification)
 
+> **MANDATORY — PROBE ALL PORTS.** You must probe **every port Nessus detected** for every unique host — not just 80/443. This includes non-standard ports such as 8080, 8443, 9200, 22, 3389, 5432, 10933, 1433, or any other port that appears in the CSV. Do NOT limit the port list to common web ports. If Nessus saw it, you probe it. A finding on port 10933 with that port not in the port summary is a reporting failure.
+
 For every unique host in the CSV, collect all ports Nessus detected and probe them:
 
 ```bash
-# Get unique host:port pairs from CSV
+# Get ALL unique host:port pairs from CSV — this is your probe list, do not filter it
 python3 scripts/parse_csv.py <scan.csv> --hosts-ports
 
-# TCP reachability check
-nmap -sT -Pn -p <port1,port2,...> --open -T4 <host>
+# TCP reachability check — include EVERY port from the CSV for that host
+nmap -sT -Pn -p <ALL_ports_from_csv> -T4 <host>
+# Example: nmap -sT -Pn -p 22,80,443,3389,5432,8080,9200,10933 -T4 bitbuckettest.example.com
 
-# Service version on open ports
-nmap -sV -Pn -p <port1,port2,...> -T4 <host>
+# Service version on open/filtered ports
+nmap -sV -Pn -p <ALL_ports_from_csv> -T4 <host>
 
 # UDP (only if Nessus detected UDP ports)
 nmap -sU -Pn -p <udp_port> --open -T4 <host>
 ```
+
+> **Never use `--open`** when building the Port & Service Summary table — `--open` hides `filtered` and `closed` ports, which must still be reported. Use `--open` only for initial quick reachability checks, then always follow with a full port-state scan (without `--open`) for the summary table.
 
 Port state key:
 
@@ -85,6 +90,15 @@ If a host is entirely unreachable (all ports filtered/no ICMP), mark it **Host u
 > 1. Verify **every finding present in the CSV**, not just the ones listed here.
 > 2. Use **any appropriate tool or command** — the commands shown are suggestions, not requirements. If a different curl flag, nmap script, testssl.sh, nikto, or any other tool is better suited, use it.
 > 3. Investigate findings that fall outside this table using your best judgement and the appropriate bash tooling.
+
+> **ENUMERATE WHAT YOU FIND.** Confirming a finding is not the end — it is the beginning. If a finding reveals something (a file, a directory, an open service, a version string, exposed data), enumerate it fully and include the results in `findings.md`. Examples:
+> - `.DS_Store` confirmed → parse the binary, extract filenames, recurse into each disclosed subdirectory and check for nested `.DS_Store` files, enumerate actual files in each directory using paths from the page source. Report the complete file inventory in the finding.
+> - Elasticsearch open → query `/_cat/indices` and `/_cluster/health` (read-only) to show what indices are exposed.
+> - Directory listing enabled → list the directory contents and note any sensitive filenames.
+> - nginx/Apache version confirmed → cross-reference the exact version against all known CVEs for that version, not just the one Nessus flagged.
+> - Open non-standard port → banner-grab it, identify the service, check if it exposes anything sensitive.
+>
+> **Do not stop at "confirmed". Show what it means.** The goal is for the reader to understand the real-world impact, not just that a vulnerability exists.
 >
 > | Finding | Web? | Tool |
 > |---------|------|------|
