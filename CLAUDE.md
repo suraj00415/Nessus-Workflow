@@ -77,7 +77,6 @@ Findings acknowledged by the developer/asset owner. Do not verify these — just
 | TLS Certificate Issues (expired, self-signed, untrusted CA) | Acknowledged by developer/asset owner — accepted risk |
 | TLS Version Vulnerabilities (TLS 1.0, TLS 1.1, SSLv3, POODLE, BEAST, etc.) | Acknowledged by developer/asset owner — accepted risk |
 | Weak / Discouraged Cipher Suites (DHE, RC4, 3DES, NULL, EXPORT, etc.) | Acknowledged by developer/asset owner — accepted risk |
-| Apache Tomcat Vulnerabilities (all severities — CVEs, misconfigs, outdated versions) | Acknowledged by developer/asset owner — unpatched, accepted risk |
 | SSL/TLS Certificate Expiry | Acknowledged by developer/asset owner — accepted risk |
 | Post-Quantum / Shor's Algorithm Vulnerabilities (HNDL attack, classical-only key exchange, no MLKEM/Kyber/post-quantum KEM) | Acknowledged by developer/asset owner — accepted risk |
 

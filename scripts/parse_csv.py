@@ -30,7 +30,9 @@ SKIP_NAMES = {
 
 
 def load(path):
-    findings = defaultdict(lambda: {"desc": "", "risk": "", "cve": "", "cvss": "", "hosts": []})
+    findings = defaultdict(lambda: {
+        "desc": "", "risk": "", "cve": "", "cvss": "", "hosts": [], "plugin_outputs": {}
+    })
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -46,6 +48,9 @@ def load(path):
                 findings[name]["cvss"] = row["CVSS v2.0 Base Score"].strip()
             if entry not in findings[name]["hosts"]:
                 findings[name]["hosts"].append(entry)
+            raw = row.get("Plugin Output", "").strip()
+            if raw and entry not in findings[name]["plugin_outputs"]:
+                findings[name]["plugin_outputs"][entry] = raw
     return findings
 
 
@@ -127,6 +132,9 @@ def main():
         if len(data["hosts"]) > 15:
             print(f"    ... and {len(data['hosts']) - 15} more")
         print(f"  Description: {data['desc'][:300].replace(chr(10), ' ')}")
+        if data["plugin_outputs"]:
+            first_entry, first_output = next(iter(data["plugin_outputs"].items()))
+            print(f"  Plugin output ({first_entry}): {first_output[:200].replace(chr(10), ' | ')}")
 
 
 if __name__ == "__main__":

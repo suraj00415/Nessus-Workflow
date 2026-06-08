@@ -58,7 +58,6 @@ EXCLUDED_KEYWORDS = [
     "Discouraged Cipher",
     "Weak Cipher",
     "Cipher Suite",
-    "Apache Tomcat",
     "Certificate Expir",
     "Self-Signed",
     "Untrusted CA",
@@ -169,9 +168,164 @@ def collect_host_ports(paths):
     return result
 
 
+import re as _re
+
+
+def clean_plugin_output(raw: str) -> str:
+    """
+    Strip noise from Nessus Plugin Output, keeping only signal lines.
+
+    Removed:
+    - Raw HTTP response header blocks (Date:, Connection:, X-Cache:, Via:,
+      X-Amz-*, Content-Length:, Content-Type: when part of a header dump)
+    - OS SinFP/MLSinFP hex fingerprint blobs
+    - Hex/binary banner bytes (0x00: ...)
+    - TLS ALPN/NPN protocol lists when only h2+http/1.1 (expected default)
+    - Backported-detection credential reminder lines
+    - Traceroute hop lists
+    - Clock-difference lines from ICMP Timestamp
+    - Empty or whitespace-only lines beyond the first separator
+
+    Kept:
+    - Installed version / fixed version
+    - URLs detected
+    - Default files found
+    - RPC service listings
+    - Certificate CN / expiry details
+    - Hostname resolution mismatches
+    - HTTP redirect Location lines
+    - Web server / service version strings
+    - OS name + confidence (without raw fingerprint bytes)
+    """
+    if not raw:
+        return ""
+
+    raw = raw.strip()
+
+    # Remove entire output for pure-noise cases
+    noise_full = [
+        r"Give Nessus credentials to perform local checks",
+        r"^Port \d+/\w+ was found to be open$",                  # SYN scanner
+        r"^For your information, here is the traceroute",        # traceroute
+    ]
+    for pat in noise_full:
+        if _re.search(pat, raw, _re.IGNORECASE | _re.MULTILINE):
+            return ""
+
+    lines = raw.splitlines()
+    cleaned = []
+
+    # Detect if this is an HTTP header dump (starts with HTTP/x.x STATUS)
+    is_http_dump = bool(lines and _re.match(r"HTTP/\d", lines[0].strip()))
+
+    # Noise line patterns — drop any line matching these
+    noise_line_pats = [
+        # HTTP header fields (only strip when inside a header dump context,
+        # or when they're a raw response block mixed in with signal)
+        r"^\s*(Date|Connection|Content-Type|Content-Length|Transfer-Encoding"
+        r"|X-Cache|Via|X-Amz-Cf-Pop|X-Amz-Cf-Id|X-Amz-Request-Id|X-Amz-Id-2"
+        r"|Cache-Control|Keep-Alive|Options allowed|Protocol version"
+        r"|HTTP/2 TLS Support|HTTP/2 Cleartext Support|ssl\s*:"
+        r"|Keep-Alive\s*:|Options allowed|Headers\s*:)",
+        # SinFP/MLSinFP hex fingerprint lines
+        r"^\s*P\d:[A-Z0-9:]+$",
+        # Hex dump lines
+        r"^\s*0x[0-9a-f]+:\s+[0-9a-f ]+",
+        # ICMP clock difference — just noise
+        r"The difference between the local and remote clocks",
+        # Nessus scanner meta lines inside outputs
+        r"^\s*(Nessus version|Nessus build|Plugin feed|Scanner edition"
+        r"|Scanner OS|Scanner distribution|Scan type|Scan name|Scan policy"
+        r"|Scanner IP|Port scanner|Port range|Ping RTT|Thorough tests"
+        r"|Experimental|Max hosts|Max checks|Recv timeout)",
+        # TLS cipher table header/separator lines
+        r"^\s*-{10,}",
+        r"^\s*Name\s+Code\s+KEX",
+        r"^\s*Name\s+Code\s*$",
+        # Backported detection
+        r"backported\s*:\s*0",
+    ]
+
+    # Lines to keep even if they'd match noise patterns (e.g. Location header)
+    keep_line_pats = [
+        r"Location\s*:",
+        r"Strict-Transport-Security",
+        r"installed version\s*:",
+        r"fixed version\s*:",
+        r"^\s*(URL|source)\s*:",            # Nessus structured key: value lines
+        r"subject\s*(name)?\s*:",
+        r"issuer\s*(name)?\s*:",
+        r"not valid (before|after)\s*:",
+        r"not after\s*:",
+        r"expires?\s*:",
+        r"security end of life\s*:",
+        r"common name\s*:",
+        r"serial number\s*:",
+        r"response code\s*:",
+        r"^\s*Server\s*:",                  # web server header line (valuable)
+    ]
+
+    in_http_headers = False
+    in_response_body = False
+    for line in lines:
+        stripped = line.strip()
+
+        # Blank lines: keep at most one consecutive blank
+        if not stripped:
+            if cleaned and cleaned[-1] != "":
+                cleaned.append("")
+            continue
+
+        # Once we hit "Response Body :", skip everything after it (HTML/body content)
+        if _re.match(r"response body\s*:", stripped, _re.IGNORECASE):
+            in_response_body = True
+            continue
+        if in_response_body:
+            continue
+
+        # Track when we've left the HTTP status line and entered headers
+        if is_http_dump and _re.match(r"HTTP/\d", stripped):
+            in_http_headers = True
+            # Keep the status line itself (e.g. "HTTP/1.1 200 OK")
+            cleaned.append(stripped)
+            continue
+
+        # Force-keep lines regardless of noise patterns
+        if any(_re.search(p, stripped, _re.IGNORECASE) for p in keep_line_pats):
+            in_http_headers = False  # signal line — we're past the header block
+            cleaned.append(stripped)
+            continue
+
+        # Drop HTTP header lines when inside a header dump
+        if in_http_headers:
+            continue
+
+        # Drop lines matching noise patterns
+        if any(_re.search(p, stripped, _re.IGNORECASE) for p in noise_line_pats):
+            continue
+
+        cleaned.append(stripped)
+
+    # Drop leading/trailing blank lines
+    while cleaned and cleaned[0] == "":
+        cleaned.pop(0)
+    while cleaned and cleaned[-1] == "":
+        cleaned.pop()
+
+    # Collapse duplicate blank lines
+    result = []
+    for line in cleaned:
+        if line == "" and result and result[-1] == "":
+            continue
+        result.append(line)
+
+    return "\n".join(result)
+
+
 def load_csvs(paths):
     findings = defaultdict(lambda: {
-        "desc": "", "risk": "", "cve": "", "cvss": "", "hosts": [], "sources": set()
+        "desc": "", "risk": "", "cve": "", "cvss": "", "hosts": [], "sources": set(),
+        "plugin_outputs": {}  # {host:port/proto -> cleaned plugin output}
     })
     for path in paths:
         with open(path, newline="", encoding="utf-8") as f:
@@ -192,6 +346,11 @@ def load_csvs(paths):
                 findings[name]["sources"].add(os.path.basename(path))
                 if entry not in findings[name]["hosts"]:
                     findings[name]["hosts"].append(entry)
+                raw_output = row.get("Plugin Output", "").strip()
+                if raw_output and entry not in findings[name]["plugin_outputs"]:
+                    cleaned = clean_plugin_output(raw_output)
+                    if cleaned:
+                        findings[name]["plugin_outputs"][entry] = cleaned
     return findings
 
 
@@ -328,6 +487,16 @@ def main():
             lines.append(h)
         lines.append("```")
         lines.append("")
+
+        plugin_outputs = data.get("plugin_outputs", {})
+        if plugin_outputs:
+            lines.append("**Plugin output (cleaned):**")
+            for entry, output in sorted(plugin_outputs.items()):
+                lines.append(f"*{entry}:*")
+                lines.append("```")
+                lines.append(output)
+                lines.append("```")
+            lines.append("")
 
         if web:
             lines.append("> **Web finding — verification is read-only (headers/status only). No payloads, no data modification.**")

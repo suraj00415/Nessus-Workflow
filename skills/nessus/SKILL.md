@@ -160,6 +160,40 @@ nmap -O --osscan-limit <host>
 nmap -sU -p 1900 --script upnp-info <host>
 ```
 
+#### Apache Tomcat CVE Verification — PoC Research Required
+
+Apache Tomcat findings are **no longer auto-excluded**. For every Apache Tomcat CVE finding:
+
+1. **Confirm the installed version** from the Plugin Output (Nessus reports `Installed version` — use that, do not probe for version banners).
+2. **Look up the specific CVE** for that finding and find a working PoC or deterministic check. Do not assume exploitability — find evidence.
+3. **Run the minimum safe check** that confirms vulnerable behaviour without exploiting it. Examples by CVE type:
+
+| CVE type | Safe check |
+|----------|-----------|
+| Path traversal / info disclosure | `curl -sk --path-as-is "http://<host>:<port>/<payload>"` — check response code and body for path leak |
+| Default files exposed (docs, examples) | `curl -sk -o /dev/null -w "%{http_code}" http://<host>:<port>/docs/` — 200 = CONFIRMED |
+| Request smuggling / DoS (no safe check possible) | Mark as **Could not safely verify** — note installed version and fixed version from plugin output |
+| Version-only CVE (no exploitable endpoint) | Confirm version string via `curl -sk http://<host>:<port>/ -I | grep -i server` or from Nessus plugin output — mark **CONFIRMED (version only)** |
+
+4. **For each Tomcat host**, check whether the management interface is exposed:
+```bash
+# Manager app — should return 401 if present, 404 if removed
+curl -sk -o /dev/null -w "%{http_code}" http://<host>:<port>/manager/html
+curl -sk -o /dev/null -w "%{http_code}" http://<host>:<port>/host-manager/html
+# 401 = manager present (credential brute-force risk), 404 = removed (good)
+```
+
+5. **Check for default example pages** (common misconfiguration):
+```bash
+for path in /docs/ /examples/servlets/index.html /examples/jsp/index.html /examples/websocket/index.xhtml; do
+  code=$(curl -sk -o /dev/null -w "%{http_code}" "http://<host>:<port>$path")
+  echo "$code  $path"
+done
+# 200 = CONFIRMED exposed
+```
+
+> **Research note:** Before running any check, search for the specific CVE number to understand what the vulnerable condition actually is. A version match alone is sufficient to report as CONFIRMED for CVEs with no safe in-band probe — but always document what you found (or didn't find) and why.
+
 ---
 
 ## Step 3 — Write findings.md
