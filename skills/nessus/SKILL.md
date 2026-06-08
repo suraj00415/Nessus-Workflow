@@ -137,3 +137,38 @@ For each verified finding include:
 | TCP Timestamps | No | nmap -O or sysctl |
 | UPnP | No | nmap -sU, may be filtered externally |
 | Service Detection | Maybe | nmap -sV, curl for web ports |
+
+---
+
+## SELF-UPDATING THIS SKILL
+
+This file is a living document. After completing a Nessus workflow session, update this skill with anything learned that would help future sessions. Do this by editing this file directly.
+
+### When to update
+
+- A new finding type was encountered that has no entry in the verification table above — add a new bash verification block and a row to the notes table.
+- A verification command failed or gave misleading output — note the caveat and the corrected approach.
+- A new script was added to `scripts/` — document its usage in Step 1.
+- A finding category repeatedly produced false-positives or false-negatives — add a warning note under that finding's section.
+- A new workflow pattern emerged that saved time (e.g. batch verification loop, grep shortcut) — add it as a tip under the relevant step.
+
+### How to update
+
+1. Add new finding verification blocks under **Step 2** in the same format as existing ones (heading + bash block + expected output).
+2. Add a row to the **NOTES FOR SPECIFIC FINDING TYPES** table.
+3. If a new script was written, add its invocation under **Step 1**.
+4. Keep entries concise — one bash block per finding type, one-line fix, no paragraphs.
+5. Do not remove existing entries; mark deprecated commands with `# DEPRECATED:` and the reason.
+
+### Keep it small
+
+**Do not let this file grow large.** Before adding anything, ask: is this non-obvious and reusable across sessions? If not, skip it. After adding, prune: merge similar entries, delete deprecated blocks once confirmed unused, replace verbose explanations with a single line. The goal is a file you can read in under two minutes. If it grows beyond ~200 lines, compact it — preserve the commands and the table, cut the prose.
+
+### Example — adding a new finding
+
+If you encounter "SMB Signing Disabled" and verify it with:
+```bash
+nmap --script smb2-security-mode -p 445 <host>
+# Look for "Message signing enabled but not required"
+```
+Add it as a new block under Step 2 and a row `| SMB Signing Disabled | No | nmap smb2-security-mode script |` to the table.
