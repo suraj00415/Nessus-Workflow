@@ -80,6 +80,23 @@ If a host is entirely unreachable (all ports filtered/no ICMP), mark it **Host u
 
 ## Step 2 — Verify each finding
 
+> **Finding Types Reference — read this before verifying anything.**
+> The commands below are a **reference list only** — not an exhaustive checklist. You are expected to:
+> 1. Verify **every finding present in the CSV**, not just the ones listed here.
+> 2. Use **any appropriate tool or command** — the commands shown are suggestions, not requirements. If a different curl flag, nmap script, testssl.sh, nikto, or any other tool is better suited, use it.
+> 3. Investigate findings that fall outside this table using your best judgement and the appropriate bash tooling.
+>
+> | Finding | Web? | Tool |
+> |---------|------|------|
+> | Port & Service Accessibility | No | nmap -sT / -sU / -sV |
+> | HSTS Missing | Yes | curl |
+> | SSL/TLS Cipher Suites | No | openssl + nmap |
+> | Post-Quantum / Shor's HNDL | No | openssl -msg |
+> | Session Resume | No | openssl sess_out/sess_in |
+> | TCP Timestamps | No | nmap -O |
+> | UPnP | No | nmap -sU |
+> | Service Detection | Maybe | nmap -sV |
+
 #### HSTS Missing
 ```bash
 curl -sk -o /dev/null -D - --max-time 8 https://<host> | grep -i strict-transport-security
@@ -154,22 +171,3 @@ For each finding include: Status, exact command run, output excerpt, affected ho
 **Fix:** <short remediation>
 ```
 
----
-
-## Finding Types Reference
-
-> **NOTE:** The table and verification commands below are a **reference list only** — not an exhaustive checklist. You are expected to:
-> 1. Verify **every finding present in the CSV**, not just the ones listed here.
-> 2. Use **any appropriate tool or command** for verification — the commands shown are suggestions, not requirements. If a different curl flag, nmap script, testssl.sh, nikto, or any other tool is better suited, use it.
-> 3. Investigate findings that fall outside this table using your best judgement and the appropriate bash tooling.
-
-| Finding | Web? | Tool |
-|---------|------|------|
-| Port & Service Accessibility | No | nmap -sT / -sU / -sV |
-| HSTS Missing | Yes | curl |
-| SSL/TLS Cipher Suites | No | openssl + nmap |
-| Post-Quantum / Shor's HNDL | No | openssl -msg |
-| Session Resume | No | openssl sess_out/sess_in |
-| TCP Timestamps | No | nmap -O |
-| UPnP | No | nmap -sU |
-| Service Detection | Maybe | nmap -sV |
