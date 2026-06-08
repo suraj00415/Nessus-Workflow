@@ -23,5 +23,5 @@ Full automated pipeline: parse all CSVs in a directory → verify findings → w
 1. **Discover** — find all `.csv` files in the given directory
 2. **Parse** — `python3 scripts/parse_csv.py <file> --names-only` for each file
 3. **Deduplicate** — group same findings across multiple CSVs
-4. **Verify** — check `CLAUDE.md` for excluded findings first, then run bash checks per finding type (see `skills/nessus/SKILL.md`)
+4. **Verify** — **MANDATORY FIRST STEP:** cross-check every finding name against the exclusion table in `CLAUDE.md`. Any match → skip all verification, add to Excluded Findings section only. Only after filtering exclusions, run bash checks for remaining findings (see `skills/nessus/SKILL.md`)
 5. **Generate** — write `findings.md` with status, command used, output excerpt, affected hosts, and remediation

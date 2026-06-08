@@ -9,11 +9,72 @@ description: Nessus CSV analysis and finding verification. Use when given a Ness
 
 ## Step 1 — Parse the CSV(s)
 
+> **SINGLE OUTPUT FILE RULE:** Whether the input is one CSV or a directory of many CSVs, always produce exactly **one** `findings.md`. Never create per-CSV output files (e.g. `scan1_findings.md`, `scan2_findings.md`). Merge all CSVs into a single report.
+
 ```bash
+# Single CSV
 python3 scripts/parse_csv.py <scan.csv> --names-only
-python3 scripts/hosts_by_finding.py <scan.csv> "HSTS" --ips-only
+
+# Directory — all CSVs merged, one findings.md output
 python3 scripts/csv_to_findings_md.py <dir_or_csv> -o findings.md
+
+# Get hosts/ports across all CSVs in a dir
+python3 scripts/hosts_by_finding.py <dir_or_csv> "HSTS" --ips-only
 ```
+
+If multiple CSVs are present in the directory:
+- Parse all of them together — deduplicate findings by name across files
+- Merge affected hosts lists so each finding section shows all hosts from all scans
+- The Port & Service Summary covers all unique hosts across all CSVs
+
+---
+
+## Step 1.5 — Port & Service Accessibility Check (do this before any finding verification)
+
+For every unique host in the CSV, collect all ports Nessus detected and probe them:
+
+```bash
+# Get unique host:port pairs from CSV
+python3 scripts/parse_csv.py <scan.csv> --hosts-ports
+
+# TCP reachability check
+nmap -sT -Pn -p <port1,port2,...> --open -T4 <host>
+
+# Service version on open ports
+nmap -sV -Pn -p <port1,port2,...> -T4 <host>
+
+# UDP (only if Nessus detected UDP ports)
+nmap -sU -Pn -p <udp_port> --open -T4 <host>
+```
+
+Port state key:
+
+| State | Meaning |
+|-------|---------|
+| `open` | Service is live and accepting connections |
+| `closed` | Host reachable, nothing listening |
+| `filtered` | Firewall/ACL blocking — no response |
+| `open\|filtered` | UDP ambiguity — cannot distinguish |
+
+Write results into `findings.md` as a `## Port & Service Summary` table **before** all individual findings:
+
+```markdown
+## Port & Service Summary
+
+| Host | Port | Protocol | State | Service | Version |
+|------|------|----------|-------|---------|---------|
+| 10.0.0.1 | 443 | tcp | open | https | nginx 1.24 |
+| 10.0.0.1 | 8080 | tcp | filtered | — | — |
+```
+
+If a host is entirely unreachable (all ports filtered/no ICMP), mark it **Host unreachable from scanner** and skip all finding verification for that host.
+
+---
+
+## Step 1.6 — MANDATORY EXCLUSION CHECK (do this before any verification)
+
+> **STOP.** Before running any bash command against any finding, check every finding name against the exclusion table in `CLAUDE.md`. If it matches — do not run curl, openssl, or nmap for it. Add it to Excluded Findings in `findings.md` only. No exceptions.
+> Also skip verification for any host marked **unreachable** in the Port & Service Summary.
 
 ---
 
@@ -97,8 +158,14 @@ For each finding include: Status, exact command run, output excerpt, affected ho
 
 ## Finding Types Reference
 
+> **NOTE:** The table and verification commands below are a **reference list only** — not an exhaustive checklist. You are expected to:
+> 1. Verify **every finding present in the CSV**, not just the ones listed here.
+> 2. Use **any appropriate tool or command** for verification — the commands shown are suggestions, not requirements. If a different curl flag, nmap script, testssl.sh, nikto, or any other tool is better suited, use it.
+> 3. Investigate findings that fall outside this table using your best judgement and the appropriate bash tooling.
+
 | Finding | Web? | Tool |
 |---------|------|------|
+| Port & Service Accessibility | No | nmap -sT / -sU / -sV |
 | HSTS Missing | Yes | curl |
 | SSL/TLS Cipher Suites | No | openssl + nmap |
 | Post-Quantum / Shor's HNDL | No | openssl -msg |

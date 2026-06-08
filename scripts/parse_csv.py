@@ -6,6 +6,7 @@ Usage:
     python3 parse_csv.py scan.csv
     python3 parse_csv.py scan.csv --names-only
     python3 parse_csv.py scan.csv --filter-name "SSL"
+    python3 parse_csv.py scan.csv --hosts-ports
 """
 
 import csv
@@ -14,6 +15,18 @@ import argparse
 from collections import defaultdict
 
 RISK_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3, "None": 4, "": 5}
+
+SKIP_NAMES = {
+    "Nessus SYN scanner",
+    "Nessus Scan Information",
+    "Traceroute Information",
+    "OS Identification",
+    "OS Fingerprints Detected",
+    "Device Type",
+    "Common Platform Enumeration (CPE)",
+    "Host Fully Qualified Domain Name (FQDN) Resolution",
+    "Open Port Re-check",
+}
 
 
 def load(path):
@@ -36,12 +49,61 @@ def load(path):
     return findings
 
 
+def load_hosts_ports(path):
+    """Return sorted list of (host, port, proto) tuples, skipping port 0 and noise findings."""
+    seen = set()
+    rows = []
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            name = row["Name"].strip()
+            if name in SKIP_NAMES:
+                continue
+            host = row["Host"].strip()
+            port = row["Port"].strip()
+            proto = row["Protocol"].strip()
+            if port == "0" or not host:
+                continue
+            key = (host, port, proto)
+            if key not in seen:
+                seen.add(key)
+                rows.append(key)
+    return sorted(rows, key=lambda x: (x[0], int(x[1]) if x[1].isdigit() else 0, x[2]))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("csv", help="Nessus CSV file path")
     parser.add_argument("--names-only", action="store_true", help="List unique finding names sorted by host count")
     parser.add_argument("--filter-name", default="", help="Only show findings whose name contains this string")
+    parser.add_argument("--hosts-ports", action="store_true",
+                        help="List all unique host/port/proto combos (use for nmap accessibility checks)")
     args = parser.parse_args()
+
+    if args.hosts_ports:
+        rows = load_hosts_ports(args.csv)
+        # Group by host for easy nmap command construction
+        by_host = defaultdict(lambda: {"tcp": [], "udp": []})
+        for host, port, proto in rows:
+            by_host[host][proto].append(port)
+
+        print(f"{'HOST':<40} {'PROTO':<6} {'PORTS'}")
+        print("-" * 80)
+        for host in sorted(by_host):
+            for proto in ("tcp", "udp"):
+                ports = by_host[host][proto]
+                if ports:
+                    print(f"{host:<40} {proto:<6} {','.join(ports)}")
+        print()
+        print("# nmap commands:")
+        for host in sorted(by_host):
+            tcp = by_host[host]["tcp"]
+            udp = by_host[host]["udp"]
+            if tcp:
+                print(f"nmap -sT -Pn -p {','.join(tcp)} -T4 {host}")
+            if udp:
+                print(f"nmap -sU -Pn -p {','.join(udp)} -T4 {host}")
+        return
 
     findings = load(args.csv)
     sorted_findings = sorted(findings.items(), key=lambda x: (RISK_ORDER.get(x[1]["risk"], 99), -len(x[1]["hosts"])))

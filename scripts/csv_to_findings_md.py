@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-csv_to_findings_md.py — Parse all Nessus CSV files in a directory and produce
-a single findings.md file ready for a security researcher.
+csv_to_findings_md.py — Parse all Nessus CSV files in a directory (or a single
+CSV) and produce ONE findings.md. Multiple CSVs are merged — findings are
+deduplicated by name and host lists are combined. Never creates per-CSV files.
 
-For each unique finding it outputs:
-  - Finding name, risk, CVE/CVSS
-  - Full description (from Nessus)
-  - All affected hosts:port/proto
-  - A ready-to-run bash verification command block
-
-Web findings (HTTP/HTTPS on port 80/443) only get a passive check command
-(curl headers) — no payloads, no modification.
+Structure of output:
+  1. Header / metadata
+  2. Port & Service Summary (all detected host:port pairs — filled by nmap)
+  3. Table of Contents
+  4. Individual finding sections
+  5. Excluded Findings (if any)
 
 Usage:
     python3 csv_to_findings_md.py /path/to/scans/          # all .csv in dir
@@ -28,7 +27,7 @@ from datetime import date
 
 RISK_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3, "None": 4, "": 5}
 
-# Findings that are pure informational/scanner noise — skip in output
+# Pure scanner-noise rows — skip entirely (still used to extract port data)
 SKIP_NAMES = {
     "Nessus SYN scanner",
     "Nessus Scan Information",
@@ -41,9 +40,32 @@ SKIP_NAMES = {
     "Open Port Re-check",
 }
 
+# Findings excluded per asset-owner acknowledgement (from CLAUDE.md)
+EXCLUDED_KEYWORDS = [
+    "HSTS",
+    "TLS Certificate",
+    "SSL Certificate",
+    "TLS 1.0",
+    "TLS 1.1",
+    "SSLv3",
+    "POODLE",
+    "BEAST",
+    "DHE",
+    "RC4",
+    "3DES",
+    "NULL Cipher",
+    "EXPORT",
+    "Discouraged Cipher",
+    "Weak Cipher",
+    "Cipher Suite",
+    "Apache Tomcat",
+    "Certificate Expir",
+    "Self-Signed",
+    "Untrusted CA",
+]
+
 WEB_PORTS = {"80", "443", "8080", "8443", "8000", "8888"}
 
-# Bash verification commands per finding name (keyword match)
 VERIFY_CMDS = {
     "HSTS Missing": (
         "# Verify: check if Strict-Transport-Security header is present\n"
@@ -77,7 +99,7 @@ VERIFY_CMDS = {
         "# Verify: check which TLS versions are accepted\n"
         "for v in tls1 tls1_1 tls1_2 tls1_3; do\n"
         "  result=$(openssl s_client -connect <host>:<port> -$v 2>&1 </dev/null | grep '^New,')\n"
-        "  echo \"$v: ${result:-rejected}\"\n"
+        '  echo "$v: ${result:-rejected}"\n'
         "done"
     ),
     "TCP/IP Timestamps": (
@@ -88,9 +110,7 @@ VERIFY_CMDS = {
     ),
     "UPnP": (
         "# Verify: send unicast SSDP M-SEARCH to port 1900/udp\n"
-        "nmap -sU -p 1900 --script upnp-info <host>\n"
-        "# Or direct probe:\n"
-        "python3 -c \"\nimport socket\ns=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)\ns.settimeout(5)\nmsg=b'M-SEARCH * HTTP/1.1\\r\\nHOST:<host>:1900\\r\\nMAN:\\\"ssdp:discover\\\"\\r\\nMX:3\\r\\nST:ssdp:all\\r\\n\\r\\n'\ns.sendto(msg,('<host>',1900))\ntry: print(s.recvfrom(4096))\nexcept: print('No response - may be filtered')\n\""
+        "nmap -sU -p 1900 --script upnp-info <host>"
     ),
     "HyperText Transfer Protocol": (
         "# Verify: check HTTP response headers (read-only)\n"
@@ -113,6 +133,11 @@ def get_verify_cmd(name):
     )
 
 
+def is_excluded(name):
+    name_lower = name.lower()
+    return any(kw.lower() in name_lower for kw in EXCLUDED_KEYWORDS)
+
+
 def is_web_finding(name, hosts):
     web_keywords = ["http", "hsts", "https", "web", "server"]
     name_is_web = any(k in name.lower() for k in web_keywords)
@@ -120,8 +145,34 @@ def is_web_finding(name, hosts):
     return name_is_web or port_is_web
 
 
+def collect_host_ports(paths):
+    """Return dict: {host: {proto: sorted list of ports}} from all CSVs, skipping port 0."""
+    by_host = defaultdict(lambda: defaultdict(set))
+    for path in paths:
+        with open(path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                host = row["Host"].strip()
+                port = row["Port"].strip()
+                proto = row["Protocol"].strip()
+                if not host or port == "0":
+                    continue
+                by_host[host][proto].add(port)
+    # Convert sets to sorted lists
+    result = {}
+    for host in sorted(by_host):
+        result[host] = {}
+        for proto in ("tcp", "udp"):
+            ports = sorted(by_host[host].get(proto, set()), key=lambda p: int(p) if p.isdigit() else 0)
+            if ports:
+                result[host][proto] = ports
+    return result
+
+
 def load_csvs(paths):
-    findings = defaultdict(lambda: {"desc": "", "risk": "", "cve": "", "cvss": "", "hosts": [], "source": ""})
+    findings = defaultdict(lambda: {
+        "desc": "", "risk": "", "cve": "", "cvss": "", "hosts": [], "sources": set()
+    })
     for path in paths:
         with open(path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
@@ -138,67 +189,133 @@ def load_csvs(paths):
                     findings[name]["risk"] = row["Risk Factor"].strip() or row["Risk"].strip()
                     findings[name]["cve"] = row["CVE"].strip()
                     findings[name]["cvss"] = row["CVSS v2.0 Base Score"].strip()
-                    findings[name]["source"] = os.path.basename(path)
+                findings[name]["sources"].add(os.path.basename(path))
                 if entry not in findings[name]["hosts"]:
                     findings[name]["hosts"].append(entry)
     return findings
 
 
+def build_port_summary_section(host_ports):
+    """Build the ## Port & Service Summary section with a placeholder table."""
+    lines = []
+    lines.append("## Port & Service Summary")
+    lines.append("")
+    lines.append("> **Action required:** Run the nmap commands below, then fill in State, Service, and Version columns.")
+    lines.append("> Port states: `open` = service live | `closed` = host reachable, nothing listening | `filtered` = firewall/ACL blocking | `open|filtered` = UDP ambiguity")
+    lines.append("")
+
+    # nmap commands block
+    lines.append("**Commands to run:**")
+    lines.append("```bash")
+    for host, protos in host_ports.items():
+        tcp_ports = protos.get("tcp", [])
+        udp_ports = protos.get("udp", [])
+        if tcp_ports:
+            lines.append(f"nmap -sT -sV -Pn -p {','.join(tcp_ports)} -T4 {host}")
+        if udp_ports:
+            lines.append(f"nmap -sU -Pn -p {','.join(udp_ports)} -T4 {host}")
+    lines.append("```")
+    lines.append("")
+
+    # Pre-populated table (State/Service/Version left blank for fill-in)
+    lines.append("| Host | Port | Protocol | State | Service | Version |")
+    lines.append("|------|------|----------|-------|---------|---------|")
+    for host, protos in host_ports.items():
+        for proto in ("tcp", "udp"):
+            for port in protos.get(proto, []):
+                lines.append(f"| {host} | {port} | {proto} | — | — | — |")
+    lines.append("")
+    lines.append("> Hosts where **all** ports are `filtered` or `closed`: mark as **Host unreachable from scanner** and skip finding verification for that host.")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    return lines
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("path", help="Directory containing .csv files, or single .csv file")
-    parser.add_argument("-o", "--output", default="findings.md", help="Output .md file (default: findings.md)")
+    parser.add_argument("-o", "--output", default="findings.md",
+                        help="Output file name (default: findings.md). Always a single file.")
     args = parser.parse_args()
 
     if os.path.isdir(args.path):
-        csv_files = glob.glob(os.path.join(args.path, "*.csv"))
+        csv_files = sorted(glob.glob(os.path.join(args.path, "*.csv")))
+        output_path = os.path.join(args.path, args.output)
     else:
         csv_files = [args.path]
+        output_path = os.path.join(os.path.dirname(args.path) or ".", args.output)
 
     if not csv_files:
-        print(f"No CSV files found in {args.path}")
+        print(f"No CSV files found in {args.path}", file=sys.stderr)
         sys.exit(1)
 
     findings = load_csvs(csv_files)
+    host_ports = collect_host_ports(csv_files)
 
-    sorted_findings = sorted(
+    all_findings = sorted(
         findings.items(),
         key=lambda x: (RISK_ORDER.get(x[1]["risk"], 99), -len(x[1]["hosts"]))
     )
 
+    active_findings = [(n, d) for n, d in all_findings if not is_excluded(n)]
+    excluded_findings = [(n, d) for n, d in all_findings if is_excluded(n)]
+
     lines = []
-    lines.append(f"# Nessus Findings Report")
+
+    # --- Header ---
+    lines.append("# Nessus Findings Report")
     lines.append(f"**Generated:** {date.today()}  ")
-    lines.append(f"**Sources:** {', '.join(os.path.basename(p) for p in csv_files)}  ")
-    lines.append(f"**Total unique findings:** {len(sorted_findings)}  ")
-    lines.append("")
-    lines.append("---")
-    lines.append("")
-    lines.append("## Table of Contents")
-    for i, (name, data) in enumerate(sorted_findings, 1):
-        risk = data["risk"] or "Info"
-        anchor = name.lower().replace(" ", "-").replace("/", "").replace("'", "").replace("(", "").replace(")", "").replace(",", "")
-        lines.append(f"{i}. [{name}](#{anchor}) — {risk} — {len(data['hosts'])} host(s)")
+    lines.append(f"**Sources ({len(csv_files)}):** {', '.join(os.path.basename(p) for p in csv_files)}  ")
+    lines.append(f"**Unique hosts:** {len(host_ports)}  ")
+    lines.append(f"**Active findings:** {len(active_findings)}  ")
+    if excluded_findings:
+        lines.append(f"**Excluded findings:** {len(excluded_findings)} (acknowledged by asset owner — not verified)  ")
     lines.append("")
     lines.append("---")
     lines.append("")
 
-    for i, (name, data) in enumerate(sorted_findings, 1):
+    # --- Port & Service Summary ---
+    lines.extend(build_port_summary_section(host_ports))
+
+    # --- Table of Contents ---
+    lines.append("## Table of Contents")
+    lines.append("")
+    for i, (name, data) in enumerate(active_findings, 1):
+        risk = data["risk"] or "Info"
+        anchor = (name.lower()
+                  .replace(" ", "-")
+                  .replace("/", "")
+                  .replace("'", "")
+                  .replace("(", "")
+                  .replace(")", "")
+                  .replace(",", "")
+                  .replace(".", ""))
+        lines.append(f"{i}. [{name}](#{anchor}) — {risk} — {len(data['hosts'])} host(s)")
+    if excluded_findings:
+        lines.append(f"{len(active_findings) + 1}. [Excluded Findings](#excluded-findings)")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    # --- Individual findings ---
+    for i, (name, data) in enumerate(active_findings, 1):
         risk = data["risk"] or "Info"
         cvss = data["cvss"] or "N/A"
         cve = data["cve"] or "N/A"
         hosts = sorted(data["hosts"])
+        sources = sorted(data["sources"])
         web = is_web_finding(name, hosts)
 
         lines.append(f"## {i}. {name}")
         lines.append("")
-        lines.append(f"| Field | Value |")
-        lines.append(f"|-------|-------|")
+        lines.append("| Field | Value |")
+        lines.append("|-------|-------|")
         lines.append(f"| Risk | {risk} |")
         lines.append(f"| CVSS | {cvss} |")
         lines.append(f"| CVE | {cve} |")
         lines.append(f"| Hosts affected | {len(hosts)} |")
-        lines.append(f"| Source | {data['source']} |")
+        lines.append(f"| Source file(s) | {', '.join(sources)} |")
         lines.append("")
 
         lines.append("**Description:**")
@@ -213,26 +330,34 @@ def main():
         lines.append("")
 
         if web:
-            lines.append("> **Web finding — verification is read-only (headers/status check only). Do NOT send payloads or modify any data.**")
+            lines.append("> **Web finding — verification is read-only (headers/status only). No payloads, no data modification.**")
             lines.append("")
 
         lines.append("**Verification (bash):**")
-        cmd = get_verify_cmd(name)
         lines.append("```bash")
-        lines.append(cmd)
+        lines.append(get_verify_cmd(name))
         lines.append("```")
+        lines.append("")
+        lines.append(f"**Status:** <!-- CONFIRMED | PARTIALLY CONFIRMED | NOT CONFIRMED | Could not verify -->")
         lines.append("")
         lines.append("---")
         lines.append("")
 
-    output_path = args.output
-    if os.path.isdir(args.path):
-        output_path = os.path.join(args.path, args.output)
+    # --- Excluded Findings ---
+    if excluded_findings:
+        lines.append("## Excluded Findings")
+        lines.append("")
+        lines.append("| Finding | Note |")
+        lines.append("|---------|------|")
+        for name, _ in excluded_findings:
+            lines.append(f"| {name} | Excluded from this assessment as acknowledged by the developer/asset owner. |")
+        lines.append("")
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    print(f"Written: {output_path}  ({len(sorted_findings)} findings)")
+    print(f"Written: {output_path}")
+    print(f"  {len(csv_files)} CSV(s) merged  |  {len(host_ports)} host(s)  |  {len(active_findings)} active finding(s)  |  {len(excluded_findings)} excluded")
 
 
 if __name__ == "__main__":
