@@ -198,6 +198,28 @@ done
 
 ## Step 3 — Write findings.md
 
+### 3.0 — Findings Overview table (write this first, before any individual finding section)
+
+Before writing individual finding sections, add a `## Findings Overview` table that lists **every active finding** (exclude excluded findings) with its row number, severity, title, and mitigation. Use the `Solution` field from the Nessus CSV as the mitigation text; if it is empty, write "Refer to vendor advisory".
+
+```markdown
+## Findings Overview
+
+| # | Severity | Finding | Mitigation |
+|---|----------|---------|------------|
+| 1 | Critical | Apache Tomcat RCE (CVE-XXXX-XXXX) | Upgrade to Apache Tomcat 10.1.x or later. |
+| 2 | High     | SSL Session Resume Supported        | Disable TLS session ID resumption on the server. |
+| 3 | Medium   | TCP/IP Timestamps Enabled           | Set net.ipv4.tcp_timestamps = 0 in sysctl. |
+```
+
+Rules:
+- Findings are ordered by severity (Critical → High → Medium → Low → None/Info), then alphabetically within each severity.
+- One row per unique finding name — not per host.
+- Mitigation text must be a single line (collapse newlines to a space).
+- This table appears immediately after the `## Port & Service Summary` section and before the Table of Contents.
+
+---
+
 For each finding include: Status, exact command run, output excerpt, affected hosts, one-line fix.
 
 ```markdown
